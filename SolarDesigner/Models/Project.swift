@@ -41,6 +41,13 @@ struct HorizonPoint: Codable, Identifiable, Hashable {
     var halfWidth: Double = 3       // ° each side that the mark covers
 }
 
+/// Camera aim logged while recording a turn-around video (seconds from start, ° from true north, ° above horizon).
+struct HeadingSample: Codable, Hashable {
+    var t: Double
+    var az: Double
+    var el: Double
+}
+
 struct PanelSpec: Codable, Hashable {
     var name = "Generic 550 W mono"
     var watt = 550.0
@@ -100,6 +107,9 @@ struct Project: Codable, Identifiable {
     // 360° / skyline survey
     var videoName: String?
     var horizon: [HorizonPoint] = []
+    var videoSamples: [HeadingSample] = []   // present when recorded in-app
+    var videoStartHeading = 0.0              // imported video: heading at t = 0 (assumes one steady full turn)
+    var videoHFOV = 60.0                     // camera horizontal field of view, degrees
 
     // System
     var roofType: RoofType = .flat

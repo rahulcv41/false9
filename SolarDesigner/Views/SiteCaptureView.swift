@@ -15,6 +15,8 @@ struct SiteCaptureView: View {
     @State private var busy = false
     @State private var message: String?
     @State private var photoItem: PhotosPickerItem?
+    @AppStorage("googleMapsKey") private var gKey = ""
+    @State private var showKey = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,16 +65,22 @@ struct SiteCaptureView: View {
                         Label("Import", systemImage: "photo")
                     }.buttonStyle(.bordered)
                 }
-                Button { Task { await capture() } } label: {
+                Button { if gKey.isEmpty { showKey = true } else { Task { await captureGoogle() } } } label: {
                     HStack {
                         if busy { ProgressView() }
-                        Label("Confirm location & capture screenshot", systemImage: "camera.viewfinder")
+                        Label("Confirm location & capture Google satellite", systemImage: "camera.viewfinder")
                     }.frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(busy || region == nil)
+                HStack {
+                    Button("Capture from Apple Maps instead") { Task { await capture() } }
+                        .font(.footnote).disabled(busy || region == nil)
+                    Spacer()
+                    Button("Google API key") { showKey = true }.font(.footnote)
+                }
                 if let m = message { Text(m).font(.footnote).foregroundStyle(.secondary) }
-                Text("Tip: pinch to zoom until the roof fills the screen, centre the + on it, then capture. The pixel scale is calibrated automatically from the map.")
+                Text("Tip: pinch to zoom until the roof fills the screen and centre the + on it (the map is only for locating; the captured image comes from Google at that spot). Scale is calibrated automatically.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .padding()
@@ -84,6 +92,10 @@ struct SiteCaptureView: View {
             guard let l = l else { return }
             position = .region(MKCoordinateRegion(center: l.coordinate, latitudinalMeters: 120, longitudinalMeters: 120))
         }
+        .alert("Google Maps API key", isPresented: $showKey) {
+            TextField("Paste key (Maps Static API enabled)", text: $gKey).textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button("Save") {}
+        } message: { Text("Create a key in Google Cloud Console and enable “Maps Static API”. The key stays on this device.") }
         .onChange(of: photoItem) { _, item in Task { await importPhoto(item) } }
         .onAppear {
             if project.hasLocation {
@@ -141,6 +153,35 @@ struct SiteCaptureView: View {
             message = String(format: "Captured. Scale %.3f m/pixel — now outline the roof (step 2).", project.metersPerPixel)
         } catch {
             message = "Snapshot failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Google Static Maps satellite tile centred on the map reticle, zoomed to roughly match the visible area.
+    private func captureGoogle() async {
+        guard let region = region else { return }
+        busy = true; defer { busy = false }
+        let lat = region.center.latitude, lon = region.center.longitude
+        let widthM = region.span.longitudeDelta / 360 * 40_075_016 * cos(lat * .pi / 180)
+        let base = 156_543.03392 * cos(lat * .pi / 180)
+        let z = max(17, min(21, Int(floor(log2(640 * base / max(widthM, 10))))))
+        var c = URLComponents(string: "https://maps.googleapis.com/maps/api/staticmap")!
+        c.queryItems = [
+            .init(name: "center", value: "\(lat),\(lon)"), .init(name: "zoom", value: "\(z)"),
+            .init(name: "size", value: "640x640"), .init(name: "scale", value: "2"),
+            .init(name: "maptype", value: "satellite"), .init(name: "key", value: gKey)
+        ]
+        do {
+            let (data, resp) = try await URLSession.shared.data(from: c.url!)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200, let img = UIImage(data: data) else {
+                message = "Google returned an error — check the API key and that Maps Static API is enabled."; return
+            }
+            if !project.hasLocation, lat < 0 { project.azimuthDeg = 0 }
+            project.latitude = lat; project.longitude = lon; project.hasLocation = true
+            let mpp = base / pow(2, Double(z)) / 2          // scale=2 → 2 px per map pixel
+            store.setRoofImage(img, metersPerPixel: mpp, in: &project)
+            message = String(format: "Google image captured (zoom %d, %.3f m/pixel). Now outline the roof (step 2).", z, mpp)
+        } catch {
+            message = "Download failed: \(error.localizedDescription)"
         }
     }
 
