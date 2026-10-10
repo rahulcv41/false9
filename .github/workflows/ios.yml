@@ -1,0 +1,28 @@
+name: iOS build & test
+on:
+  push:
+    branches: ["claude/**", main, master]
+  pull_request:
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build & test (iOS Simulator)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          DEST=$(xcrun simctl list devices available | grep -m1 -E "iPhone" | sed -E 's/^ *(.*) \(([0-9A-F-]{36})\).*/\2/')
+          echo "Using simulator $DEST"
+          xcodebuild test -project SolarDesigner.xcodeproj -scheme SolarDesigner \
+            -destination "id=$DEST" -resultBundlePath build/result.xcresult \
+            CODE_SIGNING_ALLOWED=NO | tee build/xcodebuild.log | tail -n 200
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
