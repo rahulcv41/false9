@@ -36,6 +36,11 @@ final class ProjectStore: ObservableObject {
         return p
     }
 
+    func insert(_ p: Project) {
+        projects.insert(p, at: 0)
+        save()
+    }
+
     func delete(at offsets: IndexSet) {
         for i in offsets { try? FileManager.default.removeItem(at: dir(for: projects[i].id)) }
         projects.remove(atOffsets: offsets)

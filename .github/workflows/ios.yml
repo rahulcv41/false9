@@ -12,17 +12,42 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate
-      - name: Build & test (iOS Simulator)
+      - name: Pick simulator
+        run: |
+          DEST=$(xcrun simctl list devices available | grep -m1 -E "iPhone" | sed -E 's/^ *(.*) \(([0-9A-F-]{36})\).*/\2/')
+          echo "DEST=$DEST" >> $GITHUB_ENV
+          echo "Using simulator $DEST"
+      - name: Build & test
         run: |
           set -o pipefail
           mkdir -p build
-          DEST=$(xcrun simctl list devices available | grep -m1 -E "iPhone" | sed -E 's/^ *(.*) \(([0-9A-F-]{36})\).*/\2/')
-          echo "Using simulator $DEST"
           xcodebuild test -project SolarDesigner.xcodeproj -scheme SolarDesigner \
-            -destination "id=$DEST" -resultBundlePath build/result.xcresult \
-            CODE_SIGNING_ALLOWED=NO | tee build/xcodebuild.log | tail -n 200
+            -destination "id=$DEST" -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/xcodebuild.log | grep -E "error:|warning: unre|Test Case|DEMO|\*\* TEST" | head -n 200
+      - name: Screenshots of the running app
+        if: always()
+        continue-on-error: true
+        run: |
+          mkdir -p shots
+          xcrun simctl boot "$DEST" || true
+          xcrun simctl bootstatus "$DEST" -b || true
+          APP=$(find build/dd/Build/Products -name SolarDesigner.app -maxdepth 3 | head -1)
+          xcrun simctl install "$DEST" "$APP"
+          for s in list detail site roof survey settings layout shade outputs; do
+            xcrun simctl launch "$DEST" com.solardesigner.app -demoScreen $s || true
+            sleep 8
+            xcrun simctl io "$DEST" screenshot shots/$s.png || true
+            xcrun simctl terminate "$DEST" com.solardesigner.app || true
+          done
+          if [ -d /tmp/solar-exports ]; then
+            mkdir -p exports && cp /tmp/solar-exports/* exports/
+            for f in exports/*.pdf; do sips -s format png "$f" --out "${f%.pdf}.png" >/dev/null 2>&1 || true; done
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: xcodebuild-log
-          path: build/xcodebuild.log
+          name: results
+          path: |
+            build/xcodebuild.log
+            shots/
+            exports/
